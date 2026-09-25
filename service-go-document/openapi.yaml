@@ -1,4 +1,4 @@
-openapi: 3.0.3
+openapi: 3.2.1
 info:
   title: Doclet Document Service
   version: 0.1.0
@@ -13,7 +13,7 @@ info:
     All error responses share the shape `{"error": "<code>"}`.
   license:
     name: Apache-2.0
-    url: https://www.apache.org/licenses/LICENSE-2.0
+    identifier: Apache-2.0
 security: []  # Doclet is anonymous; no authentication.
 servers:
   - url: http://localhost:8080
@@ -195,7 +195,7 @@ components:
           example: Untitled
         content:
           type: string
-          format: byte
+          contentEncoding: base64
           description: |
             Base64-encoded full Yjs state update (`Y.encodeStateAsUpdate`).
             Apply it to a fresh `Y.Doc` with `Y.applyUpdate`. It is an empty
@@ -252,7 +252,7 @@ components:
       properties:
         status:
           type: string
-          enum: [ok]
+          const: ok
 
     Error:
       type: object
