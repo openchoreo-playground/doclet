@@ -1,0 +1,322 @@
+openapi: 3.0.3
+info:
+  title: Doclet Document Service
+  version: 0.1.0
+  description: |
+    REST API for creating, listing, renaming and deleting Doclet documents.
+
+    Document *content* is never written through this API. It is persisted
+    asynchronously when the document service consumes `yjs_snapshot` messages
+    from the NATS subject `doclet.documents.<document_id>.snapshots` (see the
+    collab service AsyncAPI definition).
+
+    All error responses share the shape `{"error": "<code>"}`.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+security: []  # Doclet is anonymous; no authentication.
+servers:
+  - url: http://localhost:8080
+    description: Local (`make run-document`)
+  - url: http://localhost:8081
+    description: Docker Compose `app` profile
+  - url: /api/document-svc
+    description: Via the frontend nginx proxy
+tags:
+  - name: documents
+    description: Document metadata and stored Yjs state.
+  - name: health
+    description: Probes.
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: healthz
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Service is up. The body is empty.
+
+  /documents:
+    get:
+      tags: [documents]
+      operationId: listDocuments
+      summary: List or search documents
+      description: Returns documents ordered by `updated_at`, most recent first. Content is not included.
+      parameters:
+        - name: query
+          in: query
+          description: Case-insensitive substring match on `displayName`.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: |
+            Maximum number of items. Values `<= 0` or non-numeric values fall
+            back to 50, and values above 100 are clamped to 100.
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          description: Number of items to skip. Non-numeric values fall back to 0.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: A page of documents.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentList"
+        "500":
+          $ref: "#/components/responses/ListFailed"
+
+    post:
+      tags: [documents]
+      operationId: createDocument
+      summary: Create a document
+      description: The request body is optional. An empty or missing `displayName` becomes `Untitled`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDocumentRequest"
+      responses:
+        "201":
+          description: The created document, with empty `content`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          $ref: "#/components/responses/InvalidJson"
+        "500":
+          $ref: "#/components/responses/CreateFailed"
+
+  /documents/{document_id}:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      tags: [documents]
+      operationId: getDocument
+      summary: Get a document including its Yjs state
+      responses:
+        "200":
+          description: The document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          $ref: "#/components/responses/InvalidDocumentId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/FetchFailed"
+    delete:
+      tags: [documents]
+      operationId: deleteDocument
+      summary: Delete a document
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/InvalidDocumentId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/DeleteFailed"
+
+  /documents/{document_id}/title:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+    put:
+      tags: [documents]
+      operationId: updateDocumentTitle
+      summary: Rename a document
+      description: Also bumps `updated_at`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTitleRequest"
+      responses:
+        "200":
+          description: Renamed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusOk"
+        "400":
+          description: Invalid ID, malformed JSON, or empty `displayName`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalid_document_id:
+                  value: { error: invalid_document_id }
+                invalid_json:
+                  value: { error: invalid_json }
+                display_name_required:
+                  value: { error: display_name_required }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/UpdateFailed"
+
+components:
+  parameters:
+    DocumentId:
+      name: document_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Document:
+      type: object
+      required: [document_id, displayName, content, created_at, updated_at]
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          example: Untitled
+        content:
+          type: string
+          format: byte
+          description: |
+            Base64-encoded full Yjs state update (`Y.encodeStateAsUpdate`).
+            Apply it to a fresh `Y.Doc` with `Y.applyUpdate`. It is an empty
+            string for a document that has never been snapshotted.
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339, UTC, second precision.
+        updated_at:
+          type: string
+          format: date-time
+          description: RFC 3339, UTC, second precision.
+
+    DocumentListItem:
+      type: object
+      required: [document_id, displayName, updated_at]
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    DocumentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentListItem"
+
+    CreateDocumentRequest:
+      type: object
+      properties:
+        displayName:
+          type: string
+          description: Defaults to `Untitled` when empty or omitted.
+
+    UpdateTitleRequest:
+      type: object
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+
+    StatusOk:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_json
+            - invalid_document_id
+            - display_name_required
+            - not_found
+            - create_failed
+            - fetch_failed
+            - list_failed
+            - update_failed
+            - delete_failed
+
+  responses:
+    InvalidJson:
+      description: Malformed JSON body.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: invalid_json }
+    InvalidDocumentId:
+      description: "`document_id` is not a valid UUID."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: invalid_document_id }
+    NotFound:
+      description: No document with that ID.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: not_found }
+    CreateFailed:
+      description: Database error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: create_failed }
+    FetchFailed:
+      description: Database error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: fetch_failed }
+    ListFailed:
+      description: Database error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: list_failed }
+    UpdateFailed:
+      description: Database error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: update_failed }
+    DeleteFailed:
+      description: Database error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: delete_failed }

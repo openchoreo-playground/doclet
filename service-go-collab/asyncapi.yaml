@@ -1,0 +1,297 @@
+asyncapi: 3.0.0
+info:
+  title: Doclet Collab Service
+  version: 0.1.0
+  description: |
+    WebSocket hub that relays Yjs document updates and y-protocols awareness
+    (presence) between clients editing the same document, and fans them out
+    across replicas over NATS.
+
+    The operations below are written from the collab service's point of view:
+    `receive` means the service consumes the message, and `send` means it
+    emits the message.
+
+    ## Envelope
+    Every WebSocket frame and every NATS message is the same JSON envelope,
+    `{type, document_id, client_id, payload}` (Go `collab.Message`, TS
+    `SocketMessage` in `webapp-react-frontend/src/editor/DocletProvider.ts`).
+    The service stamps `document_id` and `client_id` on inbound frames from the
+    connection's query parameters and ignores whatever values the client sent.
+
+    ## Delivery semantics
+    - Relayed messages are never echoed to the originating `client_id`.
+    - Clients on the same replica receive each `yjs_update` and `presence`
+      twice: once directly from the hub and once via NATS. Yjs and awareness
+      updates are idempotent.
+    - `yjs_snapshot` is not relayed to clients. It is published only to NATS,
+      where the document service persists it.
+    - Each client has a 256-frame send buffer. Frames are dropped, not queued,
+      when the buffer is full.
+    - Unknown `type` values are logged and ignored.
+
+    ## Connection lifecycle
+    On connect the service sends the new client a `user_name` for itself and
+    then one for each other client on the document, and broadcasts the new
+    client's `user_name` to everyone else. It sends a WebSocket ping every 30 s
+    and closes connections that have been silent for 60 s. The maximum inbound
+    frame size is 1 MiB.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+defaultContentType: application/json
+
+servers:
+  websocket:
+    host: localhost:8090
+    protocol: ws
+    description: |
+      Collab WebSocket endpoint. The frontend reaches it through the nginx
+      proxy at `/ws/collab-svc`.
+  nats:
+    host: localhost:4222
+    protocol: nats
+    description: Internal message bus shared with the document service.
+
+channels:
+  collab:
+    address: /ws
+    title: Document collaboration socket
+    servers:
+      - $ref: "#/servers/websocket"
+    description: |
+      A single WebSocket per (document, client). Returns HTTP 400 with the text
+      body `missing document_id or client_id` if either query parameter is
+      absent. Origins are not checked.
+    bindings:
+      ws:
+        method: GET
+        query:
+          type: object
+          required: [document_id, client_id]
+          properties:
+            document_id:
+              type: string
+              description: The document to join. It is not validated against the document service.
+            client_id:
+              type: string
+              description: |
+                A per-session random ID (`utils.getSessionClientId`). It also
+                seeds the server-assigned display name.
+        bindingVersion: 0.1.0
+    messages:
+      yjsUpdate:
+        $ref: "#/components/messages/YjsUpdate"
+      presence:
+        $ref: "#/components/messages/Presence"
+      yjsSnapshot:
+        $ref: "#/components/messages/YjsSnapshot"
+      userName:
+        $ref: "#/components/messages/UserName"
+
+  documentUpdates:
+    address: doclet.documents.{document_id}.updates
+    title: Yjs updates fan-out
+    servers:
+      - $ref: "#/servers/nats"
+    parameters:
+      document_id:
+        $ref: "#/components/parameters/DocumentId"
+    messages:
+      yjsUpdate:
+        $ref: "#/components/messages/YjsUpdate"
+
+  documentPresence:
+    address: doclet.documents.{document_id}.presence
+    title: Awareness fan-out
+    servers:
+      - $ref: "#/servers/nats"
+    parameters:
+      document_id:
+        $ref: "#/components/parameters/DocumentId"
+    messages:
+      presence:
+        $ref: "#/components/messages/Presence"
+
+  documentSnapshots:
+    address: doclet.documents.{document_id}.snapshots
+    title: Snapshots for persistence
+    description: |
+      Consumed by the document service (`service-go-document/internal/nats.go`),
+      which base64-decodes `payload` (or `content`, if present) and overwrites
+      the document's stored content. Snapshots for unknown documents are
+      ignored.
+    servers:
+      - $ref: "#/servers/nats"
+    parameters:
+      document_id:
+        $ref: "#/components/parameters/DocumentId"
+    messages:
+      yjsSnapshot:
+        $ref: "#/components/messages/YjsSnapshot"
+
+operations:
+  receiveFromClient:
+    action: receive
+    channel:
+      $ref: "#/channels/collab"
+    summary: Frames sent by an editor client.
+    messages:
+      - $ref: "#/channels/collab/messages/yjsUpdate"
+      - $ref: "#/channels/collab/messages/presence"
+      - $ref: "#/channels/collab/messages/yjsSnapshot"
+
+  sendToClient:
+    action: send
+    channel:
+      $ref: "#/channels/collab"
+    summary: Frames pushed to editor clients.
+    description: |
+      `yjs_update` and `presence` are relayed from other clients on the same
+      document, whether they are local or arrive via NATS. `user_name` is
+      generated by the service.
+    messages:
+      - $ref: "#/channels/collab/messages/yjsUpdate"
+      - $ref: "#/channels/collab/messages/presence"
+      - $ref: "#/channels/collab/messages/userName"
+
+  publishUpdate:
+    action: send
+    channel:
+      $ref: "#/channels/documentUpdates"
+    summary: Publishes each client `yjs_update` for other replicas.
+    messages:
+      - $ref: "#/channels/documentUpdates/messages/yjsUpdate"
+
+  consumeUpdate:
+    action: receive
+    channel:
+      $ref: "#/channels/documentUpdates"
+    summary: Subscribes to `doclet.documents.*.updates` and rebroadcasts to local clients.
+    messages:
+      - $ref: "#/channels/documentUpdates/messages/yjsUpdate"
+
+  publishPresence:
+    action: send
+    channel:
+      $ref: "#/channels/documentPresence"
+    summary: Publishes each client `presence` update for other replicas.
+    messages:
+      - $ref: "#/channels/documentPresence/messages/presence"
+
+  consumePresence:
+    action: receive
+    channel:
+      $ref: "#/channels/documentPresence"
+    summary: Subscribes to `doclet.documents.*.presence` and rebroadcasts to local clients.
+    messages:
+      - $ref: "#/channels/documentPresence/messages/presence"
+
+  publishSnapshot:
+    action: send
+    channel:
+      $ref: "#/channels/documentSnapshots"
+    summary: Forwards client `yjs_snapshot` frames to the document service.
+    messages:
+      - $ref: "#/channels/documentSnapshots/messages/yjsSnapshot"
+
+components:
+  parameters:
+    DocumentId:
+      description: Document UUID, as used by the document service.
+
+  schemas:
+    Envelope:
+      type: object
+      required: [type, document_id, client_id, payload]
+      properties:
+        type:
+          type: string
+          enum: [yjs_update, presence, yjs_snapshot, user_name]
+        document_id:
+          type: string
+        client_id:
+          type: string
+          description: The client the message is about or originated from.
+        payload:
+          type: string
+
+  messages:
+    YjsUpdate:
+      name: yjs_update
+      title: Incremental Yjs update
+      summary: Emitted by a client on every local `Y.Doc` update.
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/Envelope"
+          - type: object
+            properties:
+              type:
+                const: yjs_update
+              payload:
+                description: Base64-encoded Yjs update (the `update` argument of `doc.on('update')`).
+                contentEncoding: base64
+      examples:
+        - payload:
+            type: yjs_update
+            document_id: 3f1c2b8e-9a4d-4c6b-8f0e-2d7a1b5c9e11
+            client_id: k2j4h6g8
+            payload: AQHK9eHdBAAHAQdkZWZhdWx0AwlwYXJhZ3JhcGgA
+
+    Presence:
+      name: presence
+      title: Awareness update
+      summary: Emitted by a client whenever its awareness state changes (cursor, selection, user info).
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/Envelope"
+          - type: object
+            properties:
+              type:
+                const: presence
+              payload:
+                description: Base64-encoded y-protocols awareness update (`encodeAwarenessUpdate`).
+                contentEncoding: base64
+
+    YjsSnapshot:
+      name: yjs_snapshot
+      title: Full document state
+      summary: |
+        Sent by a client when it connects and on a 1.5 s debounce after local
+        edits. This is the only path by which document content is persisted.
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/Envelope"
+          - type: object
+            properties:
+              type:
+                const: yjs_snapshot
+              payload:
+                description: Base64-encoded `Y.encodeStateAsUpdate(doc)`.
+                contentEncoding: base64
+
+    UserName:
+      name: user_name
+      title: Server-assigned display name
+      summary: Sent from the server to clients only.
+      description: |
+        Deterministic "Adjective Noun" name derived from an FNV-1a hash of
+        `client_id`. Clients cannot choose their own names.
+      payload:
+        allOf:
+          - $ref: "#/components/schemas/Envelope"
+          - type: object
+            properties:
+              type:
+                const: user_name
+              client_id:
+                description: The client this name belongs to, which may be the recipient itself.
+              payload:
+                description: Plain-text display name. Unlike the other message types, this payload is not base64.
+                examples: [Sunny Falcon]
+      examples:
+        - payload:
+            type: user_name
+            document_id: 3f1c2b8e-9a4d-4c6b-8f0e-2d7a1b5c9e11
+            client_id: k2j4h6g8
+            payload: Sunny Falcon
