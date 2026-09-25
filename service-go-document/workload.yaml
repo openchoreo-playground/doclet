@@ -1,0 +1,24 @@
+apiVersion: openchoreo.dev/v1alpha1
+
+metadata:
+  name: doclet-document-svc
+
+endpoints:
+  - name: rest-api
+    port: 8080
+    type: HTTP
+    visibility: project
+    schemaFile: openapi.yaml
+
+dependencies:
+  resources: 
+    - ref: doclet-nats
+      envBindings:                 
+        url: DOCLET_NATS_URL
+    - ref: doclet-postgres
+      envBindings:
+        host: DB_HOST
+        port: DB_PORT
+        username: DB_USER
+        password: DB_PASSWORD
+        database: DB_NAME

@@ -1,12 +1,13 @@
 apiVersion: openchoreo.dev/v1alpha1
 
 metadata:
-  name: doclet-collab
+  name: doclet-collab-svc
 
 endpoints:
   - name: ws
     port: 8080
     type: HTTP
+    schemaFile: asyncapi.yaml
 
 dependencies:
   resources: 
