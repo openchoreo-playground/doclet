@@ -1,0 +1,25 @@
+apiVersion: openchoreo.dev/v1alpha1
+
+metadata:
+  name: doclet-frontend
+
+endpoints:
+  - name: rest-api
+    port: 8080
+    type: HTTP
+    visibility: 
+      - external
+
+dependencies:
+  endpoints:
+    - component: doclet-collab-svc
+      name: ws
+      visibility: project
+      envBindings:
+        address: COLLAB_SERVICE_URL
+    - component: doclet-document-svc
+      name: http
+      visibility: project
+      envBindings:
+        address: DOC_SERVICE_URL
+
