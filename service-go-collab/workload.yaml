@@ -1,0 +1,15 @@
+apiVersion: openchoreo.dev/v1alpha1
+
+metadata:
+  name: doclet-collab
+
+endpoints:
+  - name: ws
+    port: 8080
+    type: HTTP
+
+dependencies:
+  resources: 
+    - ref: doclet-nats
+      envBindings:                 
+        url: DOCLET_NATS_URL
