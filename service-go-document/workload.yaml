@@ -7,8 +7,6 @@ endpoints:
   - name: rest-api
     port: 8080
     type: HTTP
-    visibility: 
-      - project
     schemaFile: openapi.yaml
 
 dependencies:
