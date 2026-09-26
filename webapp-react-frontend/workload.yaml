@@ -18,7 +18,7 @@ dependencies:
       envBindings:
         address: COLLAB_SERVICE_URL
     - component: doclet-document-svc
-      name: http
+      name: rest-api
       visibility: project
       envBindings:
         address: DOC_SERVICE_URL
