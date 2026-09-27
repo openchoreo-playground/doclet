@@ -5,7 +5,9 @@ RUN npm ci
 COPY . ./
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.28-alpine
+# The nginx image lags Alpine security fixes; pull them in at build time.
+RUN apk upgrade --no-cache
 COPY nginx.conf.template /etc/nginx/nginx.conf.template
 COPY docker-entrypoint.sh /usr/local/bin/doclet-entrypoint.sh
 RUN chmod +x /usr/local/bin/doclet-entrypoint.sh
