@@ -13,7 +13,7 @@ const (
 	defaultDBPort    = "5432"
 	defaultDBUser    = "doclet"
 	defaultDBName    = "doclet"
-	defaultDBSSLMode = "disable"
+	defaultDBSSLMode = "prefer"
 )
 
 type Config struct {
