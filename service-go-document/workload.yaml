@@ -14,7 +14,7 @@ dependencies:
     - ref: doclet-nats
       envBindings:                 
         url: DOCLET_NATS_URL
-    - ref: doclet-postgres
+    - ref: doclet-postgres-terraform
       envBindings:
         host: DB_HOST
         port: DB_PORT
